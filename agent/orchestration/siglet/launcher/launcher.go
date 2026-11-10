@@ -71,10 +71,15 @@ func LaunchAndWaitSignal(shutdown <-chan struct{}) {
 				sigletSignalingURLKey, sigletSignalingURL,
 				controlPlaneURLKey, cpURL,
 				tokenExchangeURLKey, tokenExchangeURL,
-				tokenFilePathKey, tokenFilePath,
 				audienceKey, audience,
 			); err != nil {
 				panic(err)
+			}
+			// The token file is the subject token, unless client credentials obtain one (tokenexchange.WithConfig).
+			if ctx.Config.GetString(tokenexchange.ClientIDKey) == "" {
+				if err := runtime.CheckRequiredParams(tokenFilePathKey, tokenFilePath); err != nil {
+					panic(err)
+				}
 			}
 
 			provider := tokenexchange.NewCachingTokenExchangeProvider(tokenFilePath,
