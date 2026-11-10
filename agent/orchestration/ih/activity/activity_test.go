@@ -217,3 +217,50 @@ func copyOf(m map[string]any) map[string]any {
 	}
 	return result
 }
+
+type capturingIdentityHubClient struct {
+	MockIdentityHubClient
+	manifest *identityhub.ParticipantManifest
+}
+
+func (c capturingIdentityHubClient) CreateParticipantContext(_ context.Context, manifest identityhub.ParticipantManifest) error {
+	*c.manifest = manifest
+	return nil
+}
+
+func TestIHActivityProcessor_ProcessDeploy_STSInIdentityHub(t *testing.T) {
+	var manifest identityhub.ParticipantManifest
+	config := validConfig(WithIdentityHub(capturingIdentityHubClient{manifest: &manifest}))
+	config.STSInIdentityHub = true
+	processor := NewProcessor(config)
+
+	activityContext := api.NewActivityContext(context.Background(), "orch-1", api.Activity{
+		ID:            "test-activity",
+		Type:          "ih",
+		Discriminator: api.DeployDiscriminator,
+	}, copyOf(processingData), make(map[string]any))
+
+	result := processor.ProcessDeploy(activityContext)
+
+	require.Equal(t, api.ActivityResultType(api.ActivityResultComplete), result.Result, "error: %v", result.Error)
+	assert.True(t, manifest.ProvisionStsAccount, "IdentityHub provisions the STS account")
+	assert.Empty(t, manifest.VaultConfig.VaultURL, "no vault URL, so the client sends no Vault partition")
+}
+
+func TestIHActivityProcessor_ProcessDeploy_DefaultKeepsTheVaultPartition(t *testing.T) {
+	var manifest identityhub.ParticipantManifest
+	processor := NewProcessor(validConfig(WithIdentityHub(capturingIdentityHubClient{manifest: &manifest})))
+
+	activityContext := api.NewActivityContext(context.Background(), "orch-1", api.Activity{
+		ID:            "test-activity",
+		Type:          "ih",
+		Discriminator: api.DeployDiscriminator,
+	}, copyOf(processingData), make(map[string]any))
+
+	result := processor.ProcessDeploy(activityContext)
+
+	require.Equal(t, api.ActivityResultType(api.ActivityResultComplete), result.Result, "error: %v", result.Error)
+	assert.False(t, manifest.ProvisionStsAccount)
+	assert.Equal(t, "https://vault.example.com:8200", manifest.VaultConfig.VaultURL)
+	assert.Equal(t, "client-456/identityhub", manifest.VaultConfig.FolderPath)
+}

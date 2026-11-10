@@ -34,6 +34,9 @@ type IdentityHubActivityProcessor struct {
 	Monitor           system.LogMonitor
 	IdentityAPIClient identityhub.IdentityAPIClient
 	VaultURL          string
+	// STSInIdentityHub provisions the participant with an STS account in IdentityHub and no Vault partition, for a
+	// control plane that signs its DCP tokens through IdentityHub's STS (identityhub.sts.enabled).
+	STSInIdentityHub bool
 	// CredentialServiceURL optional template for the credential service URL; use %s as placeholder for participantContextID
 	CredentialServiceURL string
 	// ProtocolServiceURL optional template for the protocol service URL; use %s as placeholder for participantContextID
@@ -57,6 +60,7 @@ func NewProcessor(config *Config) *IdentityHubActivityProcessor {
 		Monitor:              config.LogMonitor,
 		IdentityAPIClient:    config.IdentityAPIClient,
 		VaultURL:             config.VaultURL,
+		STSInIdentityHub:     config.STSInIdentityHub,
 		CredentialServiceURL: config.CredentialServiceURL,
 		ProtocolServiceURL:   config.ProtocolServiceURL,
 		DataServiceURL:       config.DataServiceURL,
@@ -69,6 +73,7 @@ type Config struct {
 	system.LogMonitor
 	identityhub.IdentityAPIClient
 	VaultURL             string
+	STSInIdentityHub     bool
 	CredentialServiceURL string
 	ProtocolServiceURL   string
 	DataServiceURL       string
@@ -136,6 +141,11 @@ func (p IdentityHubActivityProcessor) handleDeployAction(ctx api.ActivityContext
 		return api.ActivityResult{Result: api.ActivityResultFatalError, Error: fmt.Errorf("cannot create participant in IdentityHub: %w", err)}
 	}
 	manifest := identityhub.NewParticipantManifest(participantContextId, did, data.CredentialServiceURL, data.ProtocolServiceURL, data.DataServiceURL, func(m *identityhub.ParticipantManifest) {
+		if p.STSInIdentityHub {
+			// IdentityHub creates the STS account and keeps its client secret in its own Vault
+			m.ProvisionStsAccount = true
+			return
+		}
 		m.VaultConfig.VaultURL = p.VaultURL
 		m.VaultConfig.FolderPath = folderPath
 	})

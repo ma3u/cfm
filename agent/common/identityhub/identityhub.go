@@ -9,6 +9,7 @@
  *
  *  Contributors:
  *       Metaform Systems, Inc. - initial API and implementation
+ *       Matthias Buchhorn - no Vault partition without a vault URL
  *
  */
 
@@ -242,7 +243,11 @@ func (a HttpIdentityAPIClient) CreateParticipantContext(ctx context.Context, man
 				"curve":     manifest.KeyGeneratorParameters.Curve,
 			},
 		},
-		"additionalProperties": map[string]any{
+	}
+	// A participant-scoped Vault partition only when one is configured: without it, IdentityHub keeps the participant's
+	// keys and STS client secret in its own Vault, where a control plane with the same Vault finds the secret.
+	if manifest.VaultConfig.VaultURL != "" {
+		data["additionalProperties"] = map[string]any{
 			"edc.vault.hashicorp.config": map[string]any{
 				"config": map[string]string{
 					"secretPath": manifest.VaultConfig.SecretPath,
@@ -250,7 +255,7 @@ func (a HttpIdentityAPIClient) CreateParticipantContext(ctx context.Context, man
 					"vaultUrl":   manifest.VaultConfig.VaultURL,
 				},
 			},
-		},
+		}
 	}
 
 	payload, err := json.Marshal(data)

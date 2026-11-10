@@ -257,3 +257,26 @@ func TestHttpIdentityAPIClient_DeleteParticipantContext_EscapesParticipantContex
 
 	require.NoError(t, client.DeleteParticipantContext(t.Context(), "../other?force=true#"))
 }
+
+func TestIdentityAPIClient_CreateParticipantContext_WithoutVaultURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(body, &data))
+
+		require.True(t, data["provisionStsAccount"].(bool))
+		require.NotContains(t, data, "additionalProperties", "no Vault partition without a vault URL")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"participantContextId":"test"}`))
+	}))
+	defer server.Close()
+
+	tp := mocks.NewMockTokenProvider(t)
+	tp.On("GetToken", mock.Anything, mock.Anything, mock.Anything).Return("token", nil)
+	client := HttpIdentityAPIClient{BaseURL: server.URL, TokenProvider: tp, HttpClient: &http.Client{}}
+	manifest := NewParticipantManifest("test", "did:web:test", "https://example.com/credentials", "https://example.com/dsp", "https://example.com/data",
+		func(m *ParticipantManifest) { m.ProvisionStsAccount = true })
+
+	require.NoError(t, client.CreateParticipantContext(t.Context(), manifest))
+}
