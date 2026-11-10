@@ -316,6 +316,28 @@ func TestDeleteParticipant(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDeleteParticipant_NoContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == CreateParticipantURL+"/test-participant" && r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	tp := mocks.NewMockTokenProvider(t)
+	tp.On("GetToken", mock.Anything, mock.Anything, mock.Anything).Return("token", nil)
+	client := HttpManagementAPIClient{
+		BaseURL:       server.URL,
+		TokenProvider: tp,
+		HttpClient:    &http.Client{},
+	}
+
+	err := client.DeleteParticipantContext(t.Context(), "test-participant")
+	require.NoError(t, err, "EDC 1.0 answers a delete with 204")
+}
+
 func TestDeleteParticipant_AuthError(t *testing.T) {
 	tp := mocks.NewMockTokenProvider(t)
 	tp.On("GetToken", mock.Anything, mock.Anything, mock.Anything).Return("", fmt.Errorf("test error"))
