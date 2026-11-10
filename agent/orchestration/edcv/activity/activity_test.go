@@ -406,3 +406,48 @@ func (m MockManagementApiClient) AssociateProfiles(_ context.Context, _ string, 
 	}
 	return nil
 }
+
+type capturingManagementAPIClient struct {
+	MockManagementApiClient
+	config *controlplane.ParticipantContextConfig
+}
+
+func (c capturingManagementAPIClient) PatchConfig(_ context.Context, _ string, config controlplane.ParticipantContextConfig) error {
+	*c.config = config
+	return nil
+}
+
+func TestEDCVActivityProcessor_Process_STSInIdentityHub(t *testing.T) {
+	var config controlplane.ParticipantContextConfig
+	c := validConfig(WithControlPlane(capturingManagementAPIClient{config: &config}))
+	c.STSTokenURL = "http://identityhub:7084/api/sts/token"
+	processor := NewProcessor(c)
+
+	activityContext := api.NewActivityContext(context.Background(), "orch-123",
+		api.Activity{ID: "test-activity", Type: "edcv", Discriminator: api.DeployDiscriminator},
+		copyOf(processingData), make(map[string]any))
+
+	result := processor.ProcessDeploy(activityContext)
+
+	require.Equal(t, api.ActivityResultType(api.ActivityResultComplete), result.Result, "error: %v", result.Error)
+	assert.Equal(t, "participant-abc", config.Entries[controlplane.STSClientIDKey])
+	assert.Equal(t, "http://identityhub:7084/api/sts/token", config.Entries[controlplane.STSTokenURLKey])
+	assert.Equal(t, "client-456-sts-client-secret", config.Entries[controlplane.STSClientSecretAliasKey])
+	assert.Equal(t, "participant-abc", config.Entries["edc.participant.id"])
+	assert.Empty(t, config.SecretEntries, "no Vault partition")
+}
+
+func TestEDCVActivityProcessor_Process_DefaultKeepsTheVaultPartition(t *testing.T) {
+	var config controlplane.ParticipantContextConfig
+	processor := NewProcessor(validConfig(WithControlPlane(capturingManagementAPIClient{config: &config})))
+
+	activityContext := api.NewActivityContext(context.Background(), "orch-123",
+		api.Activity{ID: "test-activity", Type: "edcv", Discriminator: api.DeployDiscriminator},
+		copyOf(processingData), make(map[string]any))
+
+	result := processor.ProcessDeploy(activityContext)
+
+	require.Equal(t, api.ActivityResultType(api.ActivityResultComplete), result.Result, "error: %v", result.Error)
+	assert.NotContains(t, config.Entries, controlplane.STSClientIDKey)
+	assert.Contains(t, config.SecretEntries, "edc.vault.hashicorp.config")
+}
