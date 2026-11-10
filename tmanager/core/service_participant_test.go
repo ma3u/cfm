@@ -435,6 +435,38 @@ func TestDisposeProfile(t *testing.T) {
 		assert.True(t, isPendingOrchestration(updated, model.OrchestrationResponse{ManifestID: sentManifestID, OrchestrationType: model.VPADisposeType}))
 	})
 
+	t.Run("dispose carries the deploy outputs at the top level of the payload", func(t *testing.T) {
+		service := newTestParticipantService()
+		mockClient := new(mockProvisionClient)
+
+		var payload map[string]any
+		mockClient.On("Send", ctx, mock.MatchedBy(func(manifest model.OrchestrationManifest) bool {
+			payload = manifest.Payload
+			return manifest.OrchestrationType == model.VPADisposeType
+		})).Return(nil)
+		service.provisionClient = mockClient
+
+		_, err := service.dataspaceStore.Create(ctx, newTestDataspaceProfile("dataspace-1"))
+		require.NoError(t, err)
+
+		profile := newTestParticipantProfile("tenant-1", "participant-1")
+		profile.ParticipantRoles = map[string][]string{"dataspace-1": {"test-role"}}
+		profile.Properties[model.VPAStateData] = map[string]any{
+			"participantContextId":      "0123456789abcdef0123456789abcdef",
+			model.ParticipantIdentifier: "did:web:must-not-overwrite",
+		}
+		profile.VPAs[0].State = api.DeploymentStateActive
+		createdProfile, err := service.participantStore.Create(ctx, profile)
+		require.NoError(t, err)
+
+		require.NoError(t, service.DisposeProfile(ctx, "tenant-1", createdProfile.ID))
+
+		require.NotNil(t, payload)
+		assert.Equal(t, "0123456789abcdef0123456789abcdef", payload["participantContextId"])
+		assert.Equal(t, profile.Identifier, payload[model.ParticipantIdentifier], "a key the payload holds is kept")
+		assert.Contains(t, payload, model.VPAStateData, "the state data stays where it was")
+	})
+
 	t.Run("dispose non-existent participant returns error", func(t *testing.T) {
 		service := newTestParticipantService()
 
