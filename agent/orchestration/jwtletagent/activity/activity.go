@@ -9,6 +9,7 @@
  *
  *  Contributors:
  *       Metaform Systems, Inc. - initial API and implementation
+ *       Matthias Buchhorn - resource mappings optional without a jwtlet
  *
  */
 
@@ -195,45 +196,13 @@ func (p TokenExchangeActivityProcessor) ProcessDeploy(ctx api.ActivityContext) a
 	ctx.SetValue(participantContextIDKey, participantContextID)
 	span.SetAttributes(attribute.String("cfm.participantContextId", participantContextID))
 
-	// step 1: create the resource mappings via the jwtlet management API
-	mapCtx, mapSpan := p.tracer.Start(spanCtx, "cfm.agent.jwtlet.deploy.mappings", trace.WithSpanKind(trace.SpanKindClient))
-
-	// the CFM agents must be able to exchange their token for a participant-scoped EDC API token
-	rm := resourceMapping{
-		ClientIdentifier:   p.clientIdentifier,
-		ParticipantContext: participantContextID,
-		Scopes:             agentScopes,
-		Audiences:          []string{p.Audience},
+	// step 1: create the resource mappings via the jwtlet management API; without one (another RFC 8693 server whose
+	// tokens are not participant-scoped), there is nothing to map
+	if p.ManagementBasePath == "" {
+		p.Monitor.Debugf("No jwtlet management API configured, not creating resource mappings for %s", participantContextID)
+	} else if result, failed := p.createMappings(spanCtx, participantContextID); failed {
+		return result
 	}
-	p.Monitor.Debugf("Creating resource mapping for participant context: %s", participantContextID)
-	if err := p.createOrReplaceMapping(mapCtx, rm); err != nil {
-		mapSpan.RecordError(err)
-		mapSpan.End()
-		return api.ActivityResult{Result: api.ActivityResultFatalError, Error: fmt.Errorf("error creating resource mapping: %w", err)}
-	}
-	mapSpan.AddEvent("Created CFM agents resource mapping")
-
-	// the participant's workloads must be able to exchange their token for a participant-scoped token
-	// used to authenticate against Vault (resource = participant context id). Which workloads these
-	// are, and the scopes they get, comes from the configured client mappings (defaultClientMappings
-	// when unconfigured, where the control plane additionally gets the signaling scope to authorize
-	// DPS exchanges with the data plane).
-	for _, mapping := range p.resolvedMappings {
-		wm := resourceMapping{
-			ClientIdentifier:   mapping.clientIdentifier,
-			ParticipantContext: participantContextID,
-			Scopes:             mapping.scopes,
-			Audiences:          []string{p.Audience},
-		}
-		p.Monitor.Debugf("Creating workload resource mapping for %s -> %s", mapping.clientIdentifier, participantContextID)
-		if err := p.createOrReplaceMapping(mapCtx, wm); err != nil {
-			mapSpan.RecordError(err)
-			mapSpan.End()
-			return api.ActivityResult{Result: api.ActivityResultFatalError, Error: fmt.Errorf("error creating resource mapping for %s: %w", mapping.clientIdentifier, err)}
-		}
-	}
-	mapSpan.AddEvent("Created workload resource mappings")
-	mapSpan.End()
 
 	// step 2: verify the token exchange works for the new participant context. Requesting the
 	// full agent scope set also proves that every scope has a scope mapping seeded in jwtlet,
@@ -285,6 +254,11 @@ func (p TokenExchangeActivityProcessor) ProcessDispose(ctx api.ActivityContext) 
 		return api.ActivityResult{Result: api.ActivityResultFatalError, Error: err}
 	}
 	span.SetAttributes(attribute.String("cfm.participantContextId", participantContextID))
+
+	if p.ManagementBasePath == "" {
+		p.Monitor.Debugf("No jwtlet management API configured, no resource mappings to delete for %s", participantContextID)
+		return api.ActivityResult{Result: api.ActivityResultComplete}
+	}
 
 	if err := p.deleteMapping(spanCtx, p.clientIdentifier, participantContextID); err != nil {
 		span.RecordError(err)
@@ -409,4 +383,47 @@ func decodeJWTClaims(jwtToken string) (map[string]any, error) {
 		return nil, fmt.Errorf("error parsing JWT payload: %w", err)
 	}
 	return claims, nil
+}
+
+// createMappings creates the agents' and the workloads' resource mappings in jwtlet for a participant context.
+func (p TokenExchangeActivityProcessor) createMappings(spanCtx context.Context, participantContextID string) (api.ActivityResult, bool) {
+	mapCtx, mapSpan := p.tracer.Start(spanCtx, "cfm.agent.jwtlet.deploy.mappings", trace.WithSpanKind(trace.SpanKindClient))
+
+	// the CFM agents must be able to exchange their token for a participant-scoped EDC API token
+	rm := resourceMapping{
+		ClientIdentifier:   p.clientIdentifier,
+		ParticipantContext: participantContextID,
+		Scopes:             agentScopes,
+		Audiences:          []string{p.Audience},
+	}
+	p.Monitor.Debugf("Creating resource mapping for participant context: %s", participantContextID)
+	if err := p.createOrReplaceMapping(mapCtx, rm); err != nil {
+		mapSpan.RecordError(err)
+		mapSpan.End()
+		return api.ActivityResult{Result: api.ActivityResultFatalError, Error: fmt.Errorf("error creating resource mapping: %w", err)}, true
+	}
+	mapSpan.AddEvent("Created CFM agents resource mapping")
+
+	// the participant's workloads must be able to exchange their token for a participant-scoped token
+	// used to authenticate against Vault (resource = participant context id). Which workloads these
+	// are, and the scopes they get, comes from the configured client mappings (defaultClientMappings
+	// when unconfigured, where the control plane additionally gets the signaling scope to authorize
+	// DPS exchanges with the data plane).
+	for _, mapping := range p.resolvedMappings {
+		wm := resourceMapping{
+			ClientIdentifier:   mapping.clientIdentifier,
+			ParticipantContext: participantContextID,
+			Scopes:             mapping.scopes,
+			Audiences:          []string{p.Audience},
+		}
+		p.Monitor.Debugf("Creating workload resource mapping for %s -> %s", mapping.clientIdentifier, participantContextID)
+		if err := p.createOrReplaceMapping(mapCtx, wm); err != nil {
+			mapSpan.RecordError(err)
+			mapSpan.End()
+			return api.ActivityResult{Result: api.ActivityResultFatalError, Error: fmt.Errorf("error creating resource mapping for %s: %w", mapping.clientIdentifier, err)}, true
+		}
+	}
+	mapSpan.AddEvent("Created workload resource mappings")
+	mapSpan.End()
+	return api.ActivityResult{}, false
 }
