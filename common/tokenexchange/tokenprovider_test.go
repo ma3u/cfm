@@ -339,3 +339,98 @@ func TestCachingTokenExchangeProvider_ExchangesOncePerScopeAndParticipant(t *tes
 
 	assert.Equal(t, int32(2), exchanges.Load())
 }
+
+type mapConfig map[string]string
+
+func (m mapConfig) GetString(key string) string { return m[key] }
+
+func TestGetToken_ConfiguredSubjectTokenTypeAndClientCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		require.True(t, ok, "the client authenticates with HTTP Basic")
+		assert.Equal(t, "cfm-agents", user)
+		assert.Equal(t, "s3cret", pass)
+
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		form, err := url.ParseQuery(string(body))
+		require.NoError(t, err)
+		assert.Equal(t, "urn:ietf:params:oauth:grant-type:token-exchange", form.Get("grant_type"))
+		assert.Equal(t, testSubjectToken, form.Get("subject_token"))
+		assert.Equal(t, "urn:ietf:params:oauth:token-type:access_token", form.Get("subject_token_type"))
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(tokenResponse())
+	}))
+	defer server.Close()
+
+	provider := NewTokenExchangeProvider(writeTokenFile(t, testSubjectToken),
+		WithTokenExchangeUrl(server.URL),
+		WithHttpClient(&http.Client{}),
+		WithConfig(mapConfig{
+			SubjectTokenTypeKey: "urn:ietf:params:oauth:token-type:access_token",
+			ClientIDKey:         "cfm-agents",
+			ClientSecretKey:     "s3cret",
+		}),
+	)
+
+	token, err := provider.GetToken(t.Context(), testScope, testParticipantContext)
+	require.NoError(t, err)
+	assert.Equal(t, testAccessToken, token)
+}
+
+func TestGetToken_ClientCredentialsWithoutTokenFile_ObtainsTheSubjectToken(t *testing.T) {
+	var grants []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _, ok := r.BasicAuth()
+		require.True(t, ok)
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		form, err := url.ParseQuery(string(body))
+		require.NoError(t, err)
+		grants = append(grants, form.Get("grant_type"))
+
+		w.Header().Set("Content-Type", "application/json")
+		if form.Get("grant_type") == "client_credentials" {
+			_ = json.NewEncoder(w).Encode(tokenExchangeResponse{AccessToken: "client-token", ExpiresIn: 300})
+			return
+		}
+		assert.Equal(t, "client-token", form.Get("subject_token"))
+		_ = json.NewEncoder(w).Encode(tokenResponse())
+	}))
+	defer server.Close()
+
+	provider := NewTokenExchangeProvider("",
+		WithTokenExchangeUrl(server.URL),
+		WithHttpClient(&http.Client{}),
+		WithClientCredentials("cfm-agents", "s3cret"),
+		WithSubjectTokenType("urn:ietf:params:oauth:token-type:access_token"),
+	)
+
+	token, err := provider.GetToken(t.Context(), testScope, testParticipantContext)
+	require.NoError(t, err)
+	assert.Equal(t, testAccessToken, token)
+	assert.Equal(t, []string{"client_credentials", "urn:ietf:params:oauth:grant-type:token-exchange"}, grants)
+}
+
+func TestGetToken_WithoutConfig_KeepsTheJwtletDefaults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _, ok := r.BasicAuth()
+		assert.False(t, ok, "no client authentication unless configured")
+		body, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(body))
+		assert.Equal(t, DefaultSubjectTokenType, form.Get("subject_token_type"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(tokenResponse())
+	}))
+	defer server.Close()
+
+	provider := NewTokenExchangeProvider(writeTokenFile(t, testSubjectToken),
+		WithTokenExchangeUrl(server.URL),
+		WithHttpClient(&http.Client{}),
+		WithConfig(mapConfig{}),
+	)
+
+	_, err := provider.GetToken(t.Context(), testScope, testParticipantContext)
+	require.NoError(t, err)
+}
