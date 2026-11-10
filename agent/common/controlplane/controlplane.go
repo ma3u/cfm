@@ -9,7 +9,7 @@
  *
  *  Contributors:
  *       Metaform Systems, Inc. - initial API and implementation
- *       Matthias Buchhorn - STS configuration entries for IdentityHub's STS
+ *       Matthias Buchhorn - STS configuration entries for IdentityHub's STS; accept 204 on a participant context delete
  *
  */
 
@@ -171,7 +171,8 @@ func (h HttpManagementAPIClient) DeleteParticipantContext(ctx context.Context, p
 	switch resp.StatusCode {
 	case http.StatusNotFound:
 		return fmt.Errorf("participant context %s not found in control plane", participantContextID)
-	case http.StatusOK:
+	case http.StatusOK, http.StatusNoContent:
+		// EDC 1.0 answers a deleted participant context with 204
 		return nil
 	default:
 		return fmt.Errorf("failed to delete participant context on control plane: received status code %d, body: %s", resp.StatusCode, httpx.ReadErrorBody(resp))
