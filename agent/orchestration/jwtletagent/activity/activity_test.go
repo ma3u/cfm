@@ -431,3 +431,39 @@ func TestProcessDispose_FailsOnServerError(t *testing.T) {
 	require.EqualValues(t, api.ActivityResultFatalError, result.Result)
 	assert.ErrorContains(t, result.Error, "failed with status 500")
 }
+
+// TestProcessDeploy_WithoutManagementAPI_SkipsMappings asserts that, without a jwtlet management API, the activity
+// derives the participant context ID and verifies the token exchange without creating any resource mapping.
+func TestProcessDeploy_WithoutManagementAPI_SkipsMappings(t *testing.T) {
+	tp := &fakeTokenProvider{token: stubToken()}
+	processor := NewProcessor(&Config{
+		LogMonitor:    system.NoopMonitor{},
+		TokenProvider: tp,
+		HttpClient:    http.DefaultClient,
+		Audience:      "test-audience",
+	})
+	ctx := newDeployContext()
+
+	result := processor.ProcessDeploy(ctx)
+
+	require.EqualValues(t, api.ActivityResultComplete, result.Result, "expected deploy to complete, got error: %v", result.Error)
+	require.Len(t, tp.requestedScopes, 1, "the token exchange is still verified")
+	id, ok := ctx.Value(participantContextIDKey)
+	require.True(t, ok, "the participant context ID is still derived")
+	require.NoError(t, model.ValidateParticipantContextID(id.(string)))
+}
+
+// TestProcessDispose_WithoutManagementAPI_Completes asserts that dispose has no mapping to delete without a jwtlet.
+func TestProcessDispose_WithoutManagementAPI_Completes(t *testing.T) {
+	processor := NewProcessor(&Config{
+		LogMonitor:    system.NoopMonitor{},
+		TokenProvider: &fakeTokenProvider{token: stubToken()},
+		HttpClient:    http.DefaultClient,
+	})
+	processingData := map[string]any{participantContextIDKey: "0123456789abcdef0123456789abcdef"}
+	ctx := api.NewActivityContext(context.Background(), "orch-1", api.Activity{}, processingData, map[string]any{})
+
+	result := processor.ProcessDispose(ctx)
+
+	require.EqualValues(t, api.ActivityResultComplete, result.Result, "expected dispose to complete, got error: %v", result.Error)
+}

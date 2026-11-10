@@ -9,6 +9,7 @@
  *
  *  Contributors:
  *       Metaform Systems, Inc. - initial API and implementation
+ *       Matthias Buchhorn - configurable subject token type and client credentials
  *
  */
 
@@ -44,9 +45,22 @@ type TokenExchangeProvider struct {
 	filePath              string
 	tokenExchangeUrl      string
 	tokenExchangeAudience string
+	subjectTokenType      string
+	clientID              string
+	clientSecret          string
 	httpClient            *http.Client
 	monitor               system.LogMonitor
 }
+
+const (
+	// DefaultSubjectTokenType is the type jwtlet expects for a projected ServiceAccount token.
+	DefaultSubjectTokenType = "urn:ietf:params:oauth:token-type:jwt"
+
+	// SubjectTokenTypeKey, ClientIDKey and ClientSecretKey are the configuration keys WithConfig reads.
+	SubjectTokenTypeKey = "tokenexchange.subjectTokenType"
+	ClientIDKey         = "tokenexchange.clientId"
+	ClientSecretKey     = "tokenexchange.clientSecret"
+)
 
 // ProviderOption is a functional option for configuring TokenExchangeProvider
 type ProviderOption func(*TokenExchangeProvider)
@@ -79,12 +93,50 @@ func WithMonitor(monitor system.LogMonitor) ProviderOption {
 	}
 }
 
+// WithSubjectTokenType sets the subject_token_type sent with the exchange (RFC 8693, section 3). The default,
+// DefaultSubjectTokenType, is what jwtlet expects; an authorization server that accepts only access tokens as subject
+// tokens (Keycloak's standard token exchange, for example) needs "urn:ietf:params:oauth:token-type:access_token".
+func WithSubjectTokenType(tokenType string) ProviderOption {
+	return func(t *TokenExchangeProvider) {
+		if tokenType != "" {
+			t.subjectTokenType = tokenType
+		}
+	}
+}
+
+// WithClientCredentials makes the provider authenticate as an OAuth2 client (HTTP Basic, RFC 6749, section 2.3.1), for
+// an authorization server that requires client authentication on the token exchange. Without a token file path, the
+// subject token is then obtained with the client_credentials grant from the same token endpoint.
+func WithClientCredentials(clientID string, clientSecret string) ProviderOption {
+	return func(t *TokenExchangeProvider) {
+		t.clientID = clientID
+		t.clientSecret = clientSecret
+	}
+}
+
+// ConfigGetter is the part of the agent configuration OptionsFromConfig reads.
+type ConfigGetter interface {
+	GetString(key string) string
+}
+
+// WithConfig applies the optional configuration keys SubjectTokenTypeKey, ClientIDKey and ClientSecretKey. None set
+// leaves the provider as jwtlet needs it.
+func WithConfig(config ConfigGetter) ProviderOption {
+	return func(t *TokenExchangeProvider) {
+		WithSubjectTokenType(config.GetString(SubjectTokenTypeKey))(t)
+		if clientID := config.GetString(ClientIDKey); clientID != "" {
+			WithClientCredentials(clientID, config.GetString(ClientSecretKey))(t)
+		}
+	}
+}
+
 // NewTokenExchangeProvider creates a new TokenExchangeProvider with the given token file path and options
 // tokenFilePath: the absolute path to the file that contains the token
 func NewTokenExchangeProvider(tokenFilePath string, opts ...ProviderOption) TokenExchangeProvider {
 	provider := TokenExchangeProvider{
-		filePath: tokenFilePath,
-		monitor:  system.NoopMonitor{},
+		filePath:         tokenFilePath,
+		subjectTokenType: DefaultSubjectTokenType,
+		monitor:          system.NoopMonitor{},
 	}
 	for _, opt := range opts {
 		opt(&provider)
@@ -111,16 +163,15 @@ func (t TokenExchangeProvider) GetToken(ctx context.Context, scope string, parti
 // expires_in.
 func (t TokenExchangeProvider) GetExpiringToken(ctx context.Context, scope string, participantContextID string) (*token.ExpiringToken, error) {
 	requestedAt := time.Now()
-	t.monitor.Debugw("reading subject token from file", "path", t.filePath)
-	content, err := os.ReadFile(t.filePath)
+	subjectToken, err := t.subjectToken(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	formData := url.Values{}
 	formData.Set("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange")
-	formData.Set("subject_token", string(content))
-	formData.Set("subject_token_type", "urn:ietf:params:oauth:token-type:jwt")
+	formData.Set("subject_token", subjectToken)
+	formData.Set("subject_token_type", t.subjectTokenType)
 	formData.Set("resource", participantContextID)
 	formData.Set("scope", scope)
 	formData.Set("audience", t.tokenExchangeAudience)
@@ -131,6 +182,7 @@ func (t TokenExchangeProvider) GetExpiringToken(ctx context.Context, scope strin
 		return nil, fmt.Errorf("error creating token exchange request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	t.authenticate(req)
 	resp, err := t.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("error sending token exchange request: %w", err)
@@ -160,4 +212,57 @@ func (t TokenExchangeProvider) GetExpiringToken(ctx context.Context, scope strin
 		exchanged.ExpiresAt = &expiresAt
 	}
 	return exchanged, nil
+}
+
+// subjectToken reads the subject token from the token file, which is rotated on disk, so on every call. Without a
+// token file and with client credentials, it obtains one with the client_credentials grant instead.
+func (t TokenExchangeProvider) subjectToken(ctx context.Context) (string, error) {
+	if t.filePath == "" && t.clientID != "" {
+		return t.clientCredentialsToken(ctx)
+	}
+	t.monitor.Debugw("reading subject token from file", "path", t.filePath)
+	content, err := os.ReadFile(t.filePath)
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}
+
+func (t TokenExchangeProvider) clientCredentialsToken(ctx context.Context) (string, error) {
+	formData := url.Values{}
+	formData.Set("grant_type", "client_credentials")
+	req, err := http.NewRequestWithContext(ctx, "POST", t.tokenExchangeUrl+"/token", strings.NewReader(formData.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("error creating client credentials request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	t.authenticate(req)
+	resp, err := t.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("error sending client credentials request: %w", err)
+	}
+	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("error reading response body: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		t.monitor.Debugw("client credentials grant failed", "status", resp.StatusCode, "body", string(bodyBytes))
+		return "", fmt.Errorf("client credentials grant failed with status %d", resp.StatusCode)
+	}
+	var tokenResponse tokenExchangeResponse
+	if err := json.Unmarshal(bodyBytes, &tokenResponse); err != nil {
+		return "", fmt.Errorf("error decoding client credentials response: %w", err)
+	}
+	if tokenResponse.AccessToken == "" {
+		return "", fmt.Errorf("client credentials response carries no access token")
+	}
+	return tokenResponse.AccessToken, nil
+}
+
+// authenticate adds the client credentials, when configured, as HTTP Basic.
+func (t TokenExchangeProvider) authenticate(req *http.Request) {
+	if t.clientID != "" {
+		req.SetBasicAuth(url.QueryEscape(t.clientID), url.QueryEscape(t.clientSecret))
+	}
 }
