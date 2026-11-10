@@ -9,6 +9,7 @@
  *
  *  Contributors:
  *       Metaform Systems, Inc. - initial API and implementation
+ *       Matthias Buchhorn - STS configuration entries for IdentityHub's STS
  *
  */
 
@@ -62,6 +63,32 @@ func NewParticipantContextConfig(participantContextID string, participantID stri
 		SecretEntries: map[string]string{
 			"edc.vault.hashicorp.config": serialize(vaultConfig),
 		},
+	}
+}
+
+// STS configuration entries for a control plane that signs its DCP tokens through IdentityHub's STS, with the client
+// secret IdentityHub stores under the default alias of ParticipantManifest.clientSecretAlias().
+const (
+	STSClientIDKey          = "edc.iam.sts.oauth.client.id"
+	STSTokenURLKey          = "edc.iam.sts.oauth.token.url"
+	STSClientSecretAliasKey = "edc.iam.sts.oauth.client.secret.alias"
+)
+
+// NewSTSParticipantContextConfig is the configuration of a participant context whose control plane obtains its DCP
+// tokens from IdentityHub's STS: the participant's DID as STS client ID, the STS token URL, and the alias of the client
+// secret IdentityHub created with the participant. It sets no Vault partition: the control plane reads the secret from
+// its own Vault.
+func NewSTSParticipantContextConfig(participantContextID string, participantID string, stsTokenURL string) ParticipantContextConfig {
+	return ParticipantContextConfig{
+		ParticipantContextID: participantContextID,
+		Entries: map[string]string{
+			"edc.iam.issuer.id":     participantID,
+			"edc.participant.id":    participantID,
+			STSClientIDKey:          participantID,
+			STSTokenURLKey:          stsTokenURL,
+			STSClientSecretAliasKey: participantContextID + "-sts-client-secret",
+		},
+		SecretEntries: map[string]string{},
 	}
 }
 

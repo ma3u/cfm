@@ -33,6 +33,7 @@ const (
 	identityHubCredentialServiceURLKey = "identityhub.cs.url"
 	controlPlaneProtocolURLKey         = "controlplane.protocol.url"
 	controlPlaneDataServiceURLKey      = "controlplane.dataservice.url"
+	stsEnabledKey                      = "identityhub.sts.enabled"
 	tokenExchangeURLKey                = "tokenexchange.url"
 	tokenFilePathKey                   = "tokenexchange.tokenFilePath"
 	audienceKey                        = "tokenexchange.audience"
@@ -67,13 +68,14 @@ func LaunchAndWaitSignal(shutdown <-chan struct{}) {
 				tokenexchange.WithHttpClient(&httpClient))
 
 			return activity.NewProcessor(&activity.Config{
-				Client:      &httpClient,
-				LogMonitor:  ctx.Monitor,
+				Client:     &httpClient,
+				LogMonitor: ctx.Monitor,
 				IdentityAPIClient: identityhub.HttpIdentityAPIClient{
 					BaseURL:       ihURL,
 					TokenProvider: provider,
 					HttpClient:    &httpClient,
 				},
+				STSInIdentityHub:     ctx.Config.GetBool(stsEnabledKey),
 				VaultURL:             vaultURL,
 				CredentialServiceURL: ihCsURL,
 				ProtocolServiceURL:   cpProtocolURL,
