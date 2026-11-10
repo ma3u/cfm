@@ -54,6 +54,7 @@ func TestRegistrationActivityProcessor_MinimalValidData(t *testing.T) {
 	assert.NoError(t, result.Error)
 	assert.Equal(t, "did:web:someparticipant", issuerService.recorded.did)
 	assert.Equal(t, "did:web:someparticipant", issuerService.recorded.name)
+	assert.Equal(t, "some-context-id", issuerService.recorded.holderID, "the holder is keyed by the participant context ID")
 }
 
 func TestRegistrationActivityProcessor_FullValidData(t *testing.T) {
@@ -331,6 +332,7 @@ func TestRegistrationActivityProcessor_ProcessDispose(t *testing.T) {
 
 	assert.Equal(t, api.ActivityResultType(api.ActivityResultComplete), result.Result)
 	assert.NoError(t, result.Error)
+	assert.Equal(t, "some-context-id", issuerService.deletedHolderID, "dispose deletes the holder by the same key")
 }
 
 func TestRegistrationActivityProcessor_ProcessDispose_IssuerServiceFails(t *testing.T) {
@@ -382,8 +384,9 @@ type regData struct {
 }
 
 type MockIssuerService struct {
-	expectedError error
-	recorded      regData
+	expectedError   error
+	recorded        regData
+	deletedHolderID string
 }
 
 func (m *MockIssuerService) QueryCredentialsByType(ctx context.Context, participantContextID string, credentialType string) ([]issuerservice.IssuerCredentialResourceDto, error) {
@@ -391,6 +394,7 @@ func (m *MockIssuerService) QueryCredentialsByType(ctx context.Context, particip
 }
 
 func (m *MockIssuerService) DeleteHolder(ctx context.Context, participantContextID string, holderID string) error {
+	m.deletedHolderID = holderID
 	return m.expectedError
 }
 
@@ -404,4 +408,22 @@ func (m *MockIssuerService) CreateHolder(ctx context.Context, participantContext
 	m.recorded.name = name
 	m.recorded.properties = properties
 	return m.expectedError
+}
+
+func TestRegistrationActivityProcessor_DIDWithPort_HolderIDIsPathSafe(t *testing.T) {
+	issuerService := MockIssuerService{}
+	processor := NewProcessor(&Config{LogMonitor: system.NoopMonitor{}, IssuerService: &issuerService})
+
+	processingData := map[string]any{
+		"participantContextId":      "0123456789abcdef0123456789abcdef",
+		model.ParticipantIdentifier: "did:web:identityhub%3A7083:participant",
+		model.VPAData:               validVpaData(nil),
+	}
+	activity := api.Activity{ID: "test-activity", Type: "registration", Discriminator: api.DeployDiscriminator}
+	result := processor.ProcessDeploy(api.NewActivityContext(context.Background(), "orch-1", activity, processingData, map[string]any{}))
+
+	assert.Equal(t, api.ActivityResultType(api.ActivityResultComplete), result.Result)
+	assert.Equal(t, "did:web:identityhub%3A7083:participant", issuerService.recorded.did, "the holder keeps its DID")
+	assert.Equal(t, "0123456789abcdef0123456789abcdef", issuerService.recorded.holderID)
+	assert.NotContains(t, issuerService.recorded.holderID, "%")
 }
