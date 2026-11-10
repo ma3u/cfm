@@ -80,7 +80,8 @@ func LaunchAndWaitSignal(shutdown <-chan struct{}) {
 			provider := tokenexchange.NewCachingTokenExchangeProvider(tokenFilePath,
 				tokenexchange.WithTokenExchangeUrl(tokenExchangeURL),
 				tokenexchange.WithTokenExchangeAudience(audience),
-				tokenexchange.WithHttpClient(&httpClient))
+				tokenexchange.WithHttpClient(&httpClient),
+				tokenexchange.WithConfig(ctx.Config))
 
 			return activity.NewProcessor(&activity.Config{
 				LogMonitor:                ctx.Monitor,
