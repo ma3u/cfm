@@ -60,7 +60,7 @@ func (p RegistrationActivityProcessor) ProcessDeploy(ctx api.ActivityContext) ap
 		regData.HolderName = regData.DID
 	}
 
-	holderID := regData.DID
+	holderID := holderIDFor(regData)
 	properties, err := ctx.VpaProperties(model.IssuerServiceType)
 	if err != nil {
 		span.RecordError(err)
@@ -80,11 +80,19 @@ func (p RegistrationActivityProcessor) ProcessDispose(ctx api.ActivityContext) a
 	if err := ctx.ReadValues(&regData); err != nil {
 		return api.ActivityResult{Result: api.ActivityResultFatalError, Error: fmt.Errorf("error processing Registration activity for orchestration %s: %w", ctx.OID(), err)}
 	}
-	holderID := regData.DID
+	holderID := holderIDFor(regData)
 	if err := p.IssuerService.DeleteHolder(ctx.Context(), regData.ParticipantContextId, holderID); err != nil {
 		// todo: inspect error if it is retryable
 		return api.ActivityResult{Result: api.ActivityResultFatalError, Error: fmt.Errorf("registration rollback: error deleting holder in IssuerService: %w", err)}
 	}
 	p.Monitor.Debugf("Registration rollback: activity for participant '%s' completed successfully", regData.DID)
 	return api.ActivityResult{Result: api.ActivityResultComplete}
+}
+
+// holderIDFor keys the issuer holder by the participant context ID, not by the DID. A did:web with a port carries
+// "%3A", which escaped into the holder's URL path ("%253A") is refused by the IssuerService ("Ambiguous URI path
+// encoding"), so such a holder could not be deleted. The participant context ID is safe in a path, and the onboarding
+// agent already queries the holder's credentials by it (holderId = participantContextId). The holder keeps its DID.
+func holderIDFor(regData registrationData) string {
+	return regData.ParticipantContextId
 }
