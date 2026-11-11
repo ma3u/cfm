@@ -162,6 +162,28 @@ func TestHttpIdentityAPIClient_DeleteParticipantContext(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestHttpIdentityAPIClient_DeleteParticipantContext_NoContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/participants/test-id" && r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	tp := mocks.NewMockTokenProvider(t)
+	tp.On("GetToken", mock.Anything, mock.Anything, mock.Anything).Return("token", nil)
+	client := HttpIdentityAPIClient{
+		BaseURL:       server.URL,
+		TokenProvider: tp,
+		HttpClient:    &http.Client{},
+	}
+
+	err := client.DeleteParticipantContext(t.Context(), "test-id")
+	require.NoError(t, err, "IdentityHub answers a delete with 204")
+}
+
 func TestHttpIdentityAPIClient_DeleteParticipantContext_NotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
