@@ -10,6 +10,7 @@
  *  Contributors:
  *       Metaform Systems, Inc. - initial API and implementation
  *       Matthias Buchhorn - no Vault partition without a vault URL
+ *       Matthias Buchhorn - accept 204 on a participant context delete
  *
  */
 
@@ -77,7 +78,8 @@ func (a HttpIdentityAPIClient) DeleteParticipantContext(ctx context.Context, par
 	switch resp.StatusCode {
 	case http.StatusNotFound:
 		return fmt.Errorf("participant context %s not found in Identity", participantContextID)
-	case http.StatusOK:
+	case http.StatusOK, http.StatusNoContent:
+		// IdentityHub (EDC 1.0) answers a deleted participant context with 204
 		return nil
 	default:
 		return fmt.Errorf("failed to delete participant context on IdentityHub: received status code %d, body: %s", resp.StatusCode, httpx.ReadErrorBody(resp))
