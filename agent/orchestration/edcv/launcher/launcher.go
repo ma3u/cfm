@@ -30,6 +30,8 @@ const (
 	urlKey              = "vault.url"
 	ActivityType        = "edcv-activity"
 	controlPlaneURLKey  = "controlplane.url"
+	stsEnabledKey       = "identityhub.sts.enabled"
+	stsURLKey           = "identityhub.sts.url"
 	tokenExchangeURLKey = "tokenexchange.url"
 	tokenFilePathKey    = "tokenexchange.tokenFilePath"
 	audienceKey         = "tokenexchange.audience"
@@ -54,6 +56,13 @@ func LaunchAndWaitSignal(shutdown <-chan struct{}) {
 			if err := runtime.CheckRequiredParams(controlPlaneURLKey, cpURL); err != nil {
 				panic(err)
 			}
+			stsURL := ""
+			if ctx.Config.GetBool(stsEnabledKey) {
+				stsURL = ctx.Config.GetString(stsURLKey)
+				if err := runtime.CheckRequiredParams(stsURLKey, stsURL); err != nil {
+					panic(err)
+				}
+			}
 
 			provider := tokenexchange.NewCachingTokenExchangeProvider(ctx.Config.GetString(tokenFilePathKey),
 				tokenexchange.WithTokenExchangeUrl(ctx.Config.GetString(tokenExchangeURLKey)),
@@ -61,8 +70,9 @@ func LaunchAndWaitSignal(shutdown <-chan struct{}) {
 				tokenexchange.WithHttpClient(&httpClient),
 				tokenexchange.WithConfig(ctx.Config))
 			return activity.NewProcessor(&activity.Config{
-				LogMonitor: ctx.Monitor,
-				VaultURL:   vaultURL,
+				LogMonitor:  ctx.Monitor,
+				VaultURL:    vaultURL,
+				STSTokenURL: stsURL,
 				ManagementAPIClient: controlplane.HttpManagementAPIClient{
 					BaseURL:       cpURL,
 					TokenProvider: provider,

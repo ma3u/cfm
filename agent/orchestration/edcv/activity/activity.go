@@ -39,7 +39,10 @@ type EDCVActivityProcessor struct {
 	Monitor             system.LogMonitor
 	ManagementAPIClient controlplane.ManagementAPIClient
 	VaultURL            string
-	tracer              trace.Tracer
+	// STSTokenURL, when set, makes the participant context sign its DCP tokens through IdentityHub's STS at this URL
+	// instead of a Vault partition (identityhub.sts.enabled).
+	STSTokenURL string
+	tracer      trace.Tracer
 }
 
 type edcData struct {
@@ -56,6 +59,7 @@ func NewProcessor(config *Config) *EDCVActivityProcessor {
 		Monitor:             config.LogMonitor,
 		ManagementAPIClient: config.ManagementAPIClient,
 		VaultURL:            config.VaultURL,
+		STSTokenURL:         config.STSTokenURL,
 		tracer:              otel.GetTracerProvider().Tracer("cfm.agent.edcv"),
 	}
 }
@@ -63,7 +67,8 @@ func NewProcessor(config *Config) *EDCVActivityProcessor {
 type Config struct {
 	system.LogMonitor
 	controlplane.ManagementAPIClient
-	VaultURL string
+	VaultURL    string
+	STSTokenURL string
 }
 
 func (p EDCVActivityProcessor) ProcessDeploy(ctx api.ActivityContext) api.ActivityResult {
@@ -141,6 +146,9 @@ func (p EDCVActivityProcessor) handleDeployAction(ctx api.ActivityContext, data 
 
 	// create participant config in Control Plane
 	config := controlplane.NewParticipantContextConfig(participantContextId, data.ParticipantID, vaultConfig)
+	if p.STSTokenURL != "" {
+		config = controlplane.NewSTSParticipantContextConfig(participantContextId, data.ParticipantID, p.STSTokenURL)
+	}
 	if err := p.ManagementAPIClient.PatchConfig(ctx.Context(), participantContextId, config); err != nil {
 		ctrl.RecordError(err)
 		return api.ActivityResult{Result: api.ActivityResultFatalError, Error: fmt.Errorf("cannot create participant config in control plane: %w", err)}
