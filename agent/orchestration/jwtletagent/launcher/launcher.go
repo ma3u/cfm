@@ -9,6 +9,7 @@
  *
  *  Contributors:
  *       Metaform Systems, Inc. - initial API and implementation
+ *       Matthias Buchhorn - token file and management URL optional with client credentials
  *
  */
 
@@ -64,8 +65,16 @@ func LaunchAndWaitSignal(shutdown <-chan struct{}) {
 			managementBasePath := ctx.Config.GetString(managementUrlKey)
 			namespace := ctx.Config.GetString(namespaceKey)
 
-			if err := runtime.CheckRequiredParams(tokenExchangeURLKey, tokenExchangeURL, tokenFilePathKey, tokenFilePath, managementUrlKey, managementBasePath); err != nil {
+			if err := runtime.CheckRequiredParams(tokenExchangeURLKey, tokenExchangeURL); err != nil {
 				panic(err)
+			}
+			// The token file is the subject token, unless client credentials obtain one (tokenexchange.WithConfig).
+			// Without a management URL there is no jwtlet to hold resource mappings: the agent then only derives
+			// the participant context ID and verifies the token exchange.
+			if ctx.Config.GetString(tokenexchange.ClientIDKey) == "" {
+				if err := runtime.CheckRequiredParams(tokenFilePathKey, tokenFilePath, managementUrlKey, managementBasePath); err != nil {
+					panic(err)
+				}
 			}
 
 			clientMappings, err := parseClientMappings(ctx.Config)
@@ -78,6 +87,7 @@ func LaunchAndWaitSignal(shutdown <-chan struct{}) {
 				tokenexchange.WithTokenExchangeUrl(tokenExchangeURL),
 				tokenexchange.WithTokenExchangeAudience(audience),
 				tokenexchange.WithHttpClient(&httpClient),
+				tokenexchange.WithConfig(ctx.Config),
 			)
 
 			return activity.NewProcessor(&activity.Config{
