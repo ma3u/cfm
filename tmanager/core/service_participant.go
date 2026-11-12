@@ -290,6 +290,7 @@ func (p participantService) DisposeProfile(ctx context.Context, tenantID string,
 
 		oManifest.Payload[model.VPAData] = vpaManifests
 		oManifest.Payload[model.CredentialData] = generateCredentialSpecs(profile.ParticipantRoles, dProfiles)
+		addDeployOutputs(oManifest.Payload, stateData)
 
 		setPendingOrchestration(profile, oManifest)
 		err = p.participantStore.Update(c, profile)
@@ -430,6 +431,22 @@ func generateCredentialSpecs(
 		}
 	}
 	return credentials
+}
+
+// addDeployOutputs puts the deploy orchestration's output values, which the profile keeps under model.VPAStateData,
+// at the top level of the dispose payload, where the agents read their input as on deploy. Without them an agent
+// cannot tell which participant context to dispose: the participant context ID is such an output. A key the payload
+// already holds is not overwritten.
+func addDeployOutputs(payload map[string]any, stateData any) {
+	outputs, ok := stateData.(map[string]any)
+	if !ok {
+		return
+	}
+	for key, value := range outputs {
+		if _, set := payload[key]; !set {
+			payload[key] = value
+		}
+	}
 }
 
 type vpaCallbackHandler struct {
